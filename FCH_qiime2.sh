@@ -4,10 +4,10 @@
 # https://rachaellappan.github.io/VL-QIIME2-analysis/index.html
 
 #Navigate to the project directory
-#Which should have two subdirectories : 16S and 18S , each having the subdirectory 00_Data
+#Which should have two subdirectories : 16S and 18S , each having the subdirectory 00_Raw_Reads
 
 
-#Before running this script, be sure your raw sequencing reads are in the 00_Data folder
+#Before running this script, be sure your raw sequencing reads are in the 00_Raw_Reads folder
 #Read file names must have the format: sampleid_00_L001_R#_001.fastq.gz
 #The first column of metadata file should have header 'sampleid'
 
@@ -17,12 +17,12 @@ pwd
 mkdir -p work/alpha_rarefaction
 mkdir -p work/beta_rarefaction
 echo Starting qiime2
-#Verify RAW amplicon sequences are in 00_Data directory with no other files.
+#Verify RAW amplicon sequences are in 00_Raw_Reads directory with no other files.
 
 
 echo Importing fastq files into a qiime2 qza file format
 
-qiime tools import --type 'SampleData[PairedEndSequencesWithQuality]' --input-path 00_Data --input-format CasavaOneEightSingleLanePerSampleDirFmt --output-path work/demux-paired-end.qza
+qiime tools import --type 'SampleData[PairedEndSequencesWithQuality]' --input-path 00_Raw_Reads --input-format CasavaOneEightSingleLanePerSampleDirFmt --output-path work/demux-paired-end.qza
 
 echo Trimming primers from amplicons
 
@@ -102,17 +102,19 @@ echo Trimming primers from amplicons
 # Reverse primer (806R)
 # CAAGCAGAAGACGGCATACGAGAT AGTCAGCCAG CC GGACTACNVGGGTWTCTAAT
 
-qiime cutadapt trim-paired --i-demultiplexed-sequences work/demux-paired-end.qza --p-cores 12 --p-front-f GTGYCAGCMGCCGCGGTAA --p-front-r GGACTACNVGGGTWTCTAAT --p-match-adapter-wildcards --p-minimum-length 175 --p-discard-untrimmed --o-trimmed-sequences work/primer-trimmed-demux-PE.qza --verbose   &> 16S_primer_trimming.log
+qiime cutadapt trim-paired --i-demultiplexed-sequences work/demux-paired-end.qza --p-cores 12 --p-front-f GTGYCAGCMGCCGCGGTAA --p-front-r GGACTACNVGGGTWTCTAAT --o-trimmed-sequences work/primer-trimmed-demux-PE.qza --verbose &> 16S_primer_trimming.log
 
 qiime demux summarize --i-data work/primer-trimmed-demux-PE.qza --o-visualization work/primer-trimmed-demux-PE.qzv
 
 echo Visualize work/primer-trimmed-demux-PE.qzv in https://view.qiime2.org/ look for the basepair position where the median quality score is consistently less than 30.
-echo ... or not, and just keep the default parameters
+read -r -p "At what bp position does the quality score on the FORWARD read consistently drop below 30? Enter numbers only:   " fwd_trim || exit 100
+read -r -p "At what bp position does the quality score on the REVERSE read consistently drop below 30? Enter numbers only:   " rvs_trim || exit 100
+
 
 echo Truncating reads for quality using DADA2
 #Run DADA2 denoising and filtering
 #Remove low quality bases from 3 prime side by truncating the reads
-qiime dada2 denoise-paired --i-demultiplexed-seqs work/primer-trimmed-demux-PE.qza --p-trunc-len-f 250 --p-trunc-len-r 200 --p-n-threads 0 --output-dir work/DADA2_denoising_output --verbose   &> 16S_DADA2_denoising.log
+qiime dada2 denoise-paired --i-demultiplexed-seqs work/primer-trimmed-demux-PE.qza --p-trunc-len-f ${fwd_trim} --p-trunc-len-r ${rvs_trim} --output-dir work/DADA2_denoising_output --verbose &> 16S_DADA2_denoising.log
 
 echo Visualizing DADA2 outputs
 
@@ -187,14 +189,14 @@ qiime diversity beta-rarefaction --i-table work/phylogeny/final_table_no_mce.qza
 cd ../18S
 pwd
 echo Starting qiime2 on 18S
-#Verify RAW amplicon sequences are in 00_Data directory with no other files.
+#Verify RAW amplicon sequences are in 00_Raw_Reads directory with no other files.
 
 mkdir work
 mkdir work/alpha_rarefaction
 mkdir work/beta_rarefaction
 echo Importing fastq files into a qiime2 qza file format
 
-qiime tools import --type 'SampleData[PairedEndSequencesWithQuality]' --input-path 00_Data --input-format CasavaOneEightSingleLanePerSampleDirFmt --output-path work/demux-paired-end.qza
+qiime tools import --type 'SampleData[PairedEndSequencesWithQuality]' --input-path 00_Raw_Reads --input-format CasavaOneEightSingleLanePerSampleDirFmt --output-path work/demux-paired-end.qza
 
 echo Trimming primers from amplicons
 
