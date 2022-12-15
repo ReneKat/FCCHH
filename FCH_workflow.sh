@@ -1,34 +1,29 @@
-#!/bin/bash
-
+#!/bin/basH
 # Copyright (c) 2022, René KM Xavier
-
-
 set -e
 # setting to break on newline only
 IFS=$'\n'
-
-## Set project variables ##
-
+###################
+#### VARIABLES ####
+###################
 read -r -p "What directory are the raw sequencing reads in? Please give the absolute path to 00_Raw_Reads without a trailing '/'  " reads_dir || exit 100
 read -r -p "Please provide the absolute path to the project working directory:     " project_dir || exit 100
 read -r -p "What is your project name? No spaces or special characters please.   " project || exit 100
 read -r -p "How much RAM do you have available in gigabytes (Gb)? Use digits only.   " RAM || exit 100
 read -r -p "How many cores do you want to use? Use digits only   " CPU || exit 100
 read -r -p "Create a samples.txt file with unique sample ids without spaces, saved in the same directory as the raw sequencing reads. Do you have the samples.txt file made? yes or no:   " samples || exit 100
-
+# Be sure samples.txt is formatted correctly.
 if [[ "$samples" == no ]]
 then
   echo Change into the 00_Raw_Reads directory and in the terminal run: "ls ./*_R1.f*q.gz | cut -f1 -d '.' | rev | cut -f2- -d '_' | rev | sort -u >> samples.txt"
   read -r -p "Create a samples.txt file with unique sample ids without spaces, saved in the same directory as the raw sequencing reads. Do you have the samples.txt file made? yes or no:   " samples || exit 100
 fi
-
 # Make and Change into new project directory
 mkdir -p $project_dir
 cd ${project_dir}
 ###################
 ## PREPROCESSING ##
 ###################
-
 mkdir -p ./00_Raw_Reads/fastqc
 mkdir -p ./01_HQ_Reads/merged_reads/fastqc
 mkdir -p ./01_HQ_Reads/error_corrected/fastqc
@@ -36,12 +31,10 @@ mkdir -p ./01_HQ_Reads/fastqc
 mkdir -p ./01_HQ_Reads/logs
 mkdir -p ./01_HQ_Reads/nonpareil
 mkdir -p ./01_HQ_Reads/phyloFlash
-
 # Copy file of unique sample ids into the project directory
 cp ${reads_dir}/samples.txt .
-
+# Get a quick look at the size of each sample.
 read -r -p "Do you want to count the raw sequencing reads?  yes or no:   " count || exit 100
-
 if [[ "${count}" == yes ]]; then
   for file in `ls ${reads_dir}/*.f*q.gz`; do
     echo Counting all the sequences in $file
@@ -49,19 +42,17 @@ if [[ "${count}" == yes ]]; then
     echo $file,$counts >> ${reads_dir}/00_Raw_Reads_counts.csv
   done
 elif [[ "${count}" == no ]]; then :
-  #statements
 fi
-
-# ##########
-# # CONDA ##
-# ##########
+############################
+### READ QUALITY CONTROL ###
+############################
+#The following preprocesing workflow, creates high-quality trimmed, error corrected, and merged reads.
+###############
+### CONDA #####
+###############
 # Install bbmap, fastqc, and multiqc in a conda environment:
 # conda create -y -n pp bbmap fastqc multiqc
 read -r -p "Do you want to preprocess your raw sequencing reads? yes or no:   " reads_QC || exit 100
-
-
-#The following workflow, creates high-quality trimmed, error corrected, and merged reads.
-
 if [[ "${reads_QC}" == yes ]]
 then
 
@@ -162,45 +153,30 @@ then
   conda deactivate
 
 elif [[ "${reads_QC}" == no ]]; then :
-  #statements
 fi
-
-
-################
-### Assembly ###
-################
-
+# The following assembly workflow creates assemblies for three debruijn graph assemblers and compares them for each sample.
 ###############
 ### CONDA #####
 ###############
-
 # conda create -n assembly -y -c bioconda spades megahit idba
 # conda activate assembly
 # pip install biopython
-
 read -r -p "Would you like to assemble your preprocessed sample reads?  yes or no:  " assemble || exit 100
-
 if [[ "${assemble}" == yes ]]; then
   #Create directories
   mkdir -p ./02_Assembly/metaspades/logs
   mkdir -p ./02_Assembly/megahit-large/logs
   mkdir -p ./02_Assembly/idba_ud/logs
   mkdir -p ./02_Assembly/stats
-
-
-  for sample in `cat samples.txt`; do
-
-    mkdir -p ./02_Assembly/quast/${sample}
-
-    conda activate assembly
-
-    read -r -p "Which HQ reads dataset do you want to use to assemble $sample? HQ HQ_ecc HQ_merged Skip:  " HQ_Reads || exit 100
-
-
-    #Assemble reads per sample using metaspades
-
   ## Do not make a directory for megahit, it will make it itself and will fail if the output directory already exists, as to not overwrite results. ##
-
+  ## Since megahit will not write to external harddrives, the code is written to write data to home directory then move it to the working directory.
+  ################
+  ### Assembly ###
+  ################
+  for sample in `cat samples.txt`; do
+    mkdir -p ./02_Assembly/quast/${sample}
+    conda activate assembly
+    read -r -p "Which HQ reads dataset do you want to use to assemble $sample? HQ HQ_ecc HQ_merged Skip:  " HQ_Reads || exit 100
     if [[ "${HQ_Reads}" == HQ ]]
     then
 
@@ -456,9 +432,10 @@ if [[ "${assemble}" == yes ]]; then
 
     elif [[ "${HQ_Reads}" == Skip ]]; then :
     fi
-
-    read -r -p "Would you like to evaluate the sample assemblies? yes or no:  " quast || exit 100
-
+    ###################
+    ### Assembly QC ###
+    ###################
+    read -r -p "Would you like to evaluate the ${sample} assemblies? yes or no:  " quast || exit 100
     if [[ "${quast}" == yes ]]; then
       # --- Evaluation ---
 
@@ -467,14 +444,13 @@ if [[ "${assemble}" == yes ]]; then
         #statswrapper.sh ./02_Assembly/quast/${sample}/*.fasta minscaf=1000 format=3 -Xmx${RAM}G ow=t out=./02_Assembly/stats/${sample}.txt
         ~/GitHub/quast/metaquast.py -f -m 1000 -o ./02_Assembly/quast/${sample} ./02_Assembly/quast/${sample}/*.fasta >> ./02_Assembly/quast/${sample}.log 2>&1
     elif [[ "${quast}" == no ]]; then :
-      #statements
     fi
-
-
+    cut -f2,3,12 -d ',' ./02_Assembly/stats/${sample}_assembly_stats.csv
     read -r -p "Analyze the ./02_Assembly/stats/${sample}_assembly_stats.csv and ./02_Assembly/quast/${sample}/report.html and determine which ${sample} assembly is best. Please enter the absoute path to the assembly.fasta file:  " best_assembly || exit 100
-
+    ###################
+    #### TAXONOMY #####
+    ###################
     read -r -p "Would you like to estimate the taxonomy for the ${sample} metagenome? yes or no: " taxa_1 || exit 100
-
     if [[ "${taxa_1}" == yes ]]; then
       # #Pick which assembly you like best by comparing assembly_stats.csv
       # Copy best assembly to 02_Assembly directory
@@ -484,13 +460,17 @@ if [[ "${assemble}" == yes ]]; then
       sendsketch.sh in=${best_assembly} >> ./02_Assembly/taxonomy/${sample}_RefSeq.tsv 2>&1
       sendsketch.sh in=${best_assembly} nt >> ./02_Assembly/taxonomy/${sample}_nt.tsv 2>&1
     elif [[ "${taxa_1}" ==  no ]]; then :
-      #statements
     fi
-
+    # Deactivate assembly conda environment
     conda deactivate
-
-    read -r -p "Would you like to analyze the assembly using anvi'o? yes or no: " anvio_1 || exit 100
-
+    ###################
+    ##### ANVI'O ######
+    ###################
+    ###############
+    ### CONDA #####
+    ###############
+    # Please follow the conda installation instructions at: https://anvio.org/install
+    read -r -p "Would you like to analyze the ${sample} assembly using anvi'o? yes or no: " anvio_1 || exit 100
     if [[ "${anvio_1}" == yes ]]; then
       #Or, try to determine taxonomy on a per-contig basis.  If this is not sensitive enough, try BLAST instead.
       # sendsketch.sh in=${best_assembly} persequence minhits=1 records=4 >> ./02_Assembly/taxonomy/${sample}.log 2>&1
@@ -499,12 +479,11 @@ if [[ "${assemble}" == yes ]]; then
       conda activate anvio-7.1
 
       prefix=$(echo $sample | sed 's/-/_/g')
-      echo running anvio on ${sample}
+      echo running anvi\'o on ${sample}
       mkdir -p ./03_Anvio/${sample}/COG
       mkdir -p ./03_Anvio/${sample}/KOfam
       mkdir -p ./03_Anvio/${sample}/Pfam
       mkdir -p ./03_Anvio/${sample}/prodigal
-      mkdir -p ./03_Anvio/${sample}/bowtie2
       mkdir -p ./03_Anvio/logs
       #Simplify headers as to not cause future anger; make a key so that contigs can be matched up later if needed; length cut off of 500bp; the prefix argument doesn't take hyphens
       echo Reformating ${sample} fasta file and removing contigs \< 1000bp
@@ -514,20 +493,20 @@ if [[ "${assemble}" == yes ]]; then
       anvi-gen-contigs-database -T ${CPU} -f ./03_Anvio/${sample}/${sample}_renamed_c1k.fa -n ${sample} -o ./03_Anvio/${sample}/${sample}.db >> ./03_Anvio/logs/${sample}.log 2>&1
       echo running hmm
       anvi-run-hmms -c ./03_Anvio/${sample}/${sample}.db -T ${CPU} --also-scan-trnas >> ./03_Anvio/logs/${sample}.log 2>&1
-      echo running ncbi COGS
+      echo running ncbi COGS on ${sample}
       anvi-run-ncbi-cogs -c ./03_Anvio/${sample}/${sample}.db -T ${CPU} --sensitive >> ./03_Anvio/logs/${sample}.log 2>&1
-      echo running KEGG
+      echo running KEGG on ${sample}
       anvi-run-kegg-kofams -c ./03_Anvio/${sample}/${sample}.db -T ${CPU} >> ./03_Anvio/logs/${sample}.log 2>&1
-      echo running pfams
+      echo running pfams on ${sample}
       anvi-run-pfams -c ./03_Anvio/${sample}/${sample}.db -T ${CPU} >> ./03_Anvio/logs/${sample}.log 2>&1
-      echo exporting functions to contigs database
+      echo exporting functions to ${sample} contigs database
       anvi-export-functions -c ./03_Anvio/${sample}/${sample}.db -o ./03_Anvio/${sample}/COG/${sample}_COG20Category.txt --annotation-sources COG20_CATEGORY >> ./03_Anvio/logs/${sample}.log 2>&1
       anvi-export-functions -c ./03_Anvio/${sample}/${sample}.db -o ./03_Anvio/${sample}/COG/${sample}_COG20Function.txt --annotation-sources COG20_FUNCTION >> ./03_Anvio/logs/${sample}.log 2>&1
       anvi-export-functions -c ./03_Anvio/${sample}/${sample}.db -o ./03_Anvio/${sample}/KOfam/${sample}_KOfam.txt --annotation-sources KOfam >> ./03_Anvio/logs/${sample}.log 2>&1
       anvi-export-functions -c ./03_Anvio/${sample}/${sample}.db -o ./03_Anvio/${sample}/Pfam/${sample}_Pfam.txt --annotation-sources Pfam >> ./03_Anvio/logs/${sample}.log 2>&1
-      echo exporing gene calls to contig database
+      echo exporing gene calls to ${sample} contig database
       anvi-export-gene-calls -c ./03_Anvio/${sample}/${sample}.db --gene-caller prodigal -o ./03_Anvio/${sample}/prodigal/${sample}_AllGeneCalls.txt >> ./03_Anvio/logs/${sample}.log 2>&1
-      echo running SCG taxonomy
+      echo running SCG taxonomy on ${sample}
       anvi-run-scg-taxonomy -c ./03_Anvio/${sample}/${sample}.db -T ${CPU} >> ./03_Anvio/logs/${sample}.log 2>&1
 
       #Remove zeros from column 5 e-value and only write significant hits
@@ -545,11 +524,17 @@ if [[ "${assemble}" == yes ]]; then
       conda deactivate
 
     elif [[ "${anvio_1}" == no ]]; then :
-
     fi
-
-    read -r -p "Would you like to annotate your metagenomes for biosynthetic gene clusters? yes or no: " smash || exit 100
-
+    ######################
+    ### BGC Annotation ###
+    ######################
+    ################
+    ### DOCKER #####
+    ################
+    # Both antismash and bigscape are run in Docker containers. Please visit their websites for installation instructions:
+    #https://docs.antismash.secondarymetabolites.org/install/
+    #https://nselem.github.io/bigscape-corason/installation/
+    read -r -p "Would you like to annotate your ${sample} metagenome for biosynthetic gene clusters? yes or no: " smash || exit 100
     if [[ "${smash}" == yes ]]; then
       read -r -p "What minimum contig length do you want to analyze for biosynthetic gene clusters?    " min_BGC || exit 100
 
@@ -567,7 +552,7 @@ if [[ "${assemble}" == yes ]]; then
       --genefinding-tool prodigal-m \
       --cc-mibig \
       --minlength ${min_BGC} \
-      -c ${CPU} >> ./04_Annotations/antismash/${sample}.log 2>&1
+      -c ${CPU} >> ./${sample}.log 2>&1
 
       mkdir -p ./04_Annotations/bigscape/c${min_BGC}
 
@@ -584,314 +569,314 @@ if [[ "${assemble}" == yes ]]; then
       cd ${project_dir}
     elif [[ "${smash}" == no ]]; then :
     fi
-
   done
 elif [[ "${assemble}" == no ]]; then :
 fi
-
 read -r -p "Would you like to analyze annotated biosynthetic gene clusters for each sample against the MiBIG database?  yes or no: " bigscape || exit 100
-
 if [[ "${bigscape}" == yes ]]; then
   echo Running bigscape on ${project} antismash genbank files per sample
   cd ${project_dir}/04_Annotations/bigscape
-  ~/bin/run_bigscape.py c${min_BGC} c${min_BGC}_results --mix --mibig -c ${CPU} >> ./04_Annotations/bigscape/${project}.log 2&>1
+  ~/bin/run_bigscape.py c${min_BGC} c${min_BGC}_results --mix --mibig -c ${CPU} >> ./${project}.log 2&>1
 elif [[ "${bigscape}" == no ]]; then :
-  #statements
 fi
-
+#########################################################################################################################################
+##############################                BEGIN CO-ASSEMBLY                                            ##############################
+#########################################################################################################################################
 read -r -p "Would you like to co-assemble reads from your entire project?  yes or no:  " coassemble || exit 100
-
 if [[ "${coassemble}" == yes ]]; then
   echo starting to assemble ${project} reads into one co-assembly
-
   mkdir -p ./02_Assembly/metaspades/logs
   mkdir -p ./02_Assembly/megahit-large/logs
   mkdir -p ./02_Assembly/idba_ud/logs
   mkdir -p ./02_Assembly/stats
-
-
-
   mkdir -p ./02_Assembly/quast/${project}
-
-  conda activate assembly
-
-  read -r -p "Which HQ reads dataset do you want to use to co-assemble $project? HQ HQ_ecc HQ_merged Skip:  " HQ_Reads || exit 100
-
-  #Assemble reads per project using metaspades
-
   ## Do not make a directory for megahit, it will make it itself and will fail if the output directory already exists, as to not overwrite results. ##
-
+  ## Since megahit will not write to external harddrives, the code is written to write data to home directory then move it to the working directory.
+  ################
+  ### Assembly ###
+  ################
+  conda activate assembly
+  read -r -p "Which HQ reads dataset do you want to use to co-assemble $project? HQ HQ_ecc HQ_merged Skip:  " HQ_Reads || exit 100
   if [[ "${HQ_Reads}" == HQ ]]
   then
     # Check to see if the project reads have already been created. If not, then create them.
     if test -f "./01_HQ_Reads/${project}_HQ.fq.gz";
     then :
     else
-    cat ./01_HQ_Reads/*_HQ.fq.gz > ./01_HQ_Reads/${project}_HQ.fq.gz
+      cat ./01_HQ_Reads/*_HQ.fq.gz > ./01_HQ_Reads/${project}_HQ.fq.gz
     fi
     # Check to see if metaspades was already run
     if test -f "./02_Assembly/metaspades/${project}/scaffolds.fasta";
     then :
     else
-    echo Using metaspades to assemble all ${HQ_Reads} ${project} reads.
-    mkdir -p ./02_Assembly/metaspades/${project}
-    metaspades.py --only-assembler -k 21,33,55,77,99,127 --12 ./01_HQ_Reads/${project}_HQ.fq.gz -t ${CPU} -m ${RAM} -o ./02_Assembly/metaspades/${project} >> ./02_Assembly/metaspades/logs/${project}.log 2>&1
-    cp ./02_Assembly/metaspades/${project}/scaffolds.fasta ./02_Assembly/quast/${project}/metaspades.fasta
+      echo Using metaspades to assemble all ${HQ_Reads} ${project} reads.
+      mkdir -p ./02_Assembly/metaspades/${project}
+      metaspades.py --only-assembler -k 21,33,55,77,99,127 --12 ./01_HQ_Reads/${project}_HQ.fq.gz -t ${CPU} -m ${RAM} -o ./02_Assembly/metaspades/${project} >> ./02_Assembly/metaspades/logs/${project}.log 2>&1
+      cp ./02_Assembly/metaspades/${project}/scaffolds.fasta ./02_Assembly/quast/${project}/metaspades.fasta
     fi
     if test -f "./02_Assembly/quast/${project}/megahit.fasta";
     then :
     else
-    #Assemble reads per site using megahit
-    echo Using megahit to assemble ${HQ_Reads} ${project} reads.
-    megahit --12 ./01_HQ_Reads/${project}_HQ.fq.gz --presets meta-large -m ${RAM} -t ${CPU} -o ~/${project} >> ./02_Assembly/megahit-large/logs/${project}.log 2>&1
-    # use different k-mers for shorter reads
-    #megahit --12 ./01_HQ_Reads/${project}_HQ.fq.gz --k-min 21 --k-max 91 --k-step 10 -m ${RAM} -t ${CPU} -o ~/${project} >> ./02_Assembly/megahit-large/logs/${project}.log 2>&1
-    cp  ~/${project}/final.contigs.fa ./02_Assembly/quast/${project}/megahit.fasta
-    mkdir -p ./02_Assembly/megahit-large/${project}
-    mv ~/${project} ./02_Assembly/megahit-large
+      #Assemble reads per site using megahit
+      echo Using megahit to assemble ${HQ_Reads} ${project} reads.
+      megahit --12 ./01_HQ_Reads/${project}_HQ.fq.gz --presets meta-large -m ${RAM} -t ${CPU} -o ~/${project} >> ./02_Assembly/megahit-large/logs/${project}.log 2>&1
+      # use different k-mers for shorter reads
+      #megahit --12 ./01_HQ_Reads/${project}_HQ.fq.gz --k-min 21 --k-max 91 --k-step 10 -m ${RAM} -t ${CPU} -o ~/${project} >> ./02_Assembly/megahit-large/logs/${project}.log 2>&1
+      cp  ~/${project}/final.contigs.fa ./02_Assembly/quast/${project}/megahit.fasta
+      mkdir -p ./02_Assembly/megahit-large/${project}
+      mv ~/${project} ./02_Assembly/megahit-large
     fi
 
     if test -f "./01_HQ_Reads/${project}_HQ.fa";
     then :
     else
-    #IDBA can only take fasta files as input; therefore, fastq.gz files must be reformated to fasta files
-    reformat.sh in=./01_HQ_Reads/${project}_HQ.fq.gz out=./01_HQ_Reads/${project}_HQ.fa ow=t >> ./02_Assembly/idba_ud/logs/${project}.log 2>&1
-    #fq2fa --paired ./01_HQ_Reads/${project}_HQ.fq.gz ./01_HQ_Reads/${project}_HQ.fa
+      #IDBA can only take fasta files as input; therefore, fastq.gz files must be reformated to fasta files
+      reformat.sh in=./01_HQ_Reads/${project}_HQ.fq.gz out=./01_HQ_Reads/${project}_HQ.fa ow=t >> ./02_Assembly/idba_ud/logs/${project}.log 2>&1
+      #fq2fa --paired ./01_HQ_Reads/${project}_HQ.fq.gz ./01_HQ_Reads/${project}_HQ.fa
     fi
 
     if test -f "./02_Assembly/idba_ud/${project}/scaffold.fa";
     then :
     else
-    # #Assemble reads per site using idba_ud
-    echo Using idba to assemble ${HQ_Reads} ${project} reads.
-    mkdir -p ./02_Assembly/idba_ud/${project}
-    idba_ud -r ./01_HQ_Reads/${project}_HQ.fa --num_threads=${CPU} -o ./02_Assembly/idba_ud/${project} >> ./02_Assembly/idba_ud/logs/${project}.log 2>&1
-    cp ./02_Assembly/idba_ud/${project}/scaffold.fa ./02_Assembly/quast/${project}/idba.fasta
+      # #Assemble reads per site using idba_ud
+      echo Using idba to assemble ${HQ_Reads} ${project} reads.
+      mkdir -p ./02_Assembly/idba_ud/${project}
+      idba_ud -r ./01_HQ_Reads/${project}_HQ.fa --num_threads=${CPU} -o ./02_Assembly/idba_ud/${project} >> ./02_Assembly/idba_ud/logs/${project}.log 2>&1
+      cp ./02_Assembly/idba_ud/${project}/scaffold.fa ./02_Assembly/quast/${project}/idba.fasta
     fi
-    # --- Evaluation ---
-    echo metagenome_id,reads,assembler,n_contigs,contig_bp,gap_pct,ctg_L50,ctg_max,gene_counts,mapped_pct,avg_cov,assembly_performance >> ./02_Assembly/stats/${project}_assembly_stats.csv
-    echo Evaluating ${project} assemblies with AssemblyStats
-    ##statswrapper.sh ./02_Assembly/quast/${project}/*.fasta minscaf=1000 format=3 -Xmx${RAM}G ow=t out=./02_Assembly/stats/${project}.txt
-    stats.sh ./02_Assembly/metaspades/${project}/scaffolds.fasta minscaf=1000 format=3 -Xmx${RAM}G ow=t out=./02_Assembly/metaspades/${project}/stats.txt
-    spades_stats=$(cat ./02_Assembly/metaspades/${project}/stats.txt | cut -f2,4,5,9,15 -d$'\t' | sed '2q;d' | sed 's/\t/,/g')
-    stats.sh ./02_Assembly/megahit-large/${project}/final.contigs.fa minscaf=1000 format=3 -Xmx${RAM}G ow=t out=./02_Assembly/megahit-large/${project}/stats.txt
-    megahit_stats=$(cat ./02_Assembly/megahit-large/${project}/stats.txt | cut -f2,4,5,9,15 -d$'\t' | sed '2q;d' | sed 's/\t/,/g')
-    stats.sh ./02_Assembly/idba_ud/${project}/scaffold.fa minscaf=1000 format=3 -Xmx${RAM}G ow=t out=./02_Assembly/idba_ud/${project}/stats.txt
-    idba_stats=$(cat ./02_Assembly/idba_ud/${project}/stats.txt | cut -f2,4,5,9,15 -d$'\t' | sed '2q;d' | sed 's/\t/,/g')
-    #Evaluate assemblies with Quast (leave out "-R ref.fa if you don't have a reference)
 
-    echo Predicting prokaryotic genes in each ${project} assembly
-    #Count gene predictions for prokaryotes using prodigal for each assembly
-    python ~/bin/LengthFilter.py ./02_Assembly/metaspades/${project}/scaffolds.fasta -m 1000 > ./02_Assembly/metaspades/${project}/${project}_c1k.fa
-    prodigal -i ./02_Assembly/metaspades/${project}/${project}_c1k.fa -a ./02_Assembly/metaspades/${project}/${project}_c1k_proteins.faa -f gff -p meta -o ./02_Assembly/metaspades/${project}/${project}_c1k.gff >> ./02_Assembly/metaspades/logs/${project}.log 2>&1
-    spades_counts=$(grep '^>' ./02_Assembly/metaspades/${project}/${project}_c1k_proteins.faa | wc -l )
+    if test -f "./02_Assembly/stats/${project}_assembly_stats.csv"; then :
+    else
+      # --- Evaluation ---
+      echo metagenome_id,reads,assembler,n_contigs,contig_bp,gap_pct,ctg_L50,ctg_max,gene_counts,mapped_pct,avg_cov,assembly_performance >> ./02_Assembly/stats/${project}_assembly_stats.csv
+      echo Evaluating ${project} assemblies with AssemblyStats
+      ##statswrapper.sh ./02_Assembly/quast/${project}/*.fasta minscaf=1000 format=3 -Xmx${RAM}G ow=t out=./02_Assembly/stats/${project}.txt
+      stats.sh ./02_Assembly/metaspades/${project}/scaffolds.fasta minscaf=1000 format=3 -Xmx${RAM}G ow=t out=./02_Assembly/metaspades/${project}/stats.txt
+      spades_stats=$(cat ./02_Assembly/metaspades/${project}/stats.txt | cut -f2,4,5,9,15 -d$'\t' | sed '2q;d' | sed 's/\t/,/g')
+      stats.sh ./02_Assembly/megahit-large/${project}/final.contigs.fa minscaf=1000 format=3 -Xmx${RAM}G ow=t out=./02_Assembly/megahit-large/${project}/stats.txt
+      megahit_stats=$(cat ./02_Assembly/megahit-large/${project}/stats.txt | cut -f2,4,5,9,15 -d$'\t' | sed '2q;d' | sed 's/\t/,/g')
+      stats.sh ./02_Assembly/idba_ud/${project}/scaffold.fa minscaf=1000 format=3 -Xmx${RAM}G ow=t out=./02_Assembly/idba_ud/${project}/stats.txt
+      idba_stats=$(cat ./02_Assembly/idba_ud/${project}/stats.txt | cut -f2,4,5,9,15 -d$'\t' | sed '2q;d' | sed 's/\t/,/g')
+      #Evaluate assemblies with Quast (leave out "-R ref.fa if you don't have a reference)
 
-    python ~/bin/LengthFilter.py ./02_Assembly/megahit-large/${project}/final.contigs.fa -m 1000 > ./02_Assembly/megahit-large/${project}/${project}_c1k.fa
-    prodigal -i ./02_Assembly/megahit-large/${project}/${project}_c1k.fa -a ./02_Assembly/megahit-large/${project}/${project}_c1k_proteins.faa -f gff -p meta -o ./02_Assembly/megahit-large/${project}/${project}_c1k.gff >> ./02_Assembly/megahit-large/logs/${project}.log 2>&1
-    megahit_counts=$(grep '^>' ./02_Assembly/megahit-large/${project}/${project}_c1k_proteins.faa | wc -l )
+      echo Predicting prokaryotic genes in each ${project} assembly
+      #Count gene predictions for prokaryotes using prodigal for each assembly
+      python ~/bin/LengthFilter.py ./02_Assembly/metaspades/${project}/scaffolds.fasta -m 1000 > ./02_Assembly/metaspades/${project}/${project}_c1k.fa
+      prodigal -i ./02_Assembly/metaspades/${project}/${project}_c1k.fa -a ./02_Assembly/metaspades/${project}/${project}_c1k_proteins.faa -f gff -p meta -o ./02_Assembly/metaspades/${project}/${project}_c1k.gff >> ./02_Assembly/metaspades/logs/${project}.log 2>&1
+      spades_counts=$(grep '^>' ./02_Assembly/metaspades/${project}/${project}_c1k_proteins.faa | wc -l )
 
-    python ~/bin/LengthFilter.py ./02_Assembly/idba_ud/${project}/scaffold.fa -m 1000 > ./02_Assembly/idba_ud/${project}/${project}_c1k.fa
-    prodigal -i ./02_Assembly/idba_ud/${project}/${project}_c1k.fa -a ./02_Assembly/idba_ud/${project}/${project}_c1k_proteins.faa -f gff -p meta -o ./02_Assembly/idba_ud/${project}/${project}_c1k.gff >> ./02_Assembly/idba_ud/logs/${project}.log 2>&1
-    idba_counts=$(grep '^>' ./02_Assembly/idba_ud/${project}/${project}_c1k_proteins.faa | wc -l )
+      python ~/bin/LengthFilter.py ./02_Assembly/megahit-large/${project}/final.contigs.fa -m 1000 > ./02_Assembly/megahit-large/${project}/${project}_c1k.fa
+      prodigal -i ./02_Assembly/megahit-large/${project}/${project}_c1k.fa -a ./02_Assembly/megahit-large/${project}/${project}_c1k_proteins.faa -f gff -p meta -o ./02_Assembly/megahit-large/${project}/${project}_c1k.gff >> ./02_Assembly/megahit-large/logs/${project}.log 2>&1
+      megahit_counts=$(grep '^>' ./02_Assembly/megahit-large/${project}/${project}_c1k_proteins.faa | wc -l )
 
-    echo Determining metagenome content within ${project} assemblies
-    # Note that these are reads mapped to contigs > 2,000 bp.
-    #(i.e. % mapped) by mapping reads by to assembly
-    bbmap.sh in=./01_HQ_Reads/${project}_HQ.fq.gz ref=./02_Assembly/metaspades/${project}/${project}_c1k.fa nodisk covhist=./02_Assembly/metaspades/${project}/covhist.txt covstats=./02_Assembly/metaspades/${project}/covstats.txt out=./02_Assembly/metaspades/${project}/${project}_reads_assembled.fq.gz outu=./02_Assembly/metaspades/${project}/${project}_reads_unassembled.fq.gz fast=t ambig=best ow >> ./02_Assembly/metaspades/${project}/map.log 2>&1
-    spades_match=$(grep Percent\ mapped: ./02_Assembly/metaspades/${project}/map.log | cut -f2 -d$'\t' | tail -1 | tail -1)
-    spades_cov=$(grep Average\ coverage: ./02_Assembly/metaspades/${project}/map.log | cut -f2 -d$'\t' | tail -1 | tail -1)
-    spades_Pa=$(echo "$spades_match*$spades_cov" | bc)
+      python ~/bin/LengthFilter.py ./02_Assembly/idba_ud/${project}/scaffold.fa -m 1000 > ./02_Assembly/idba_ud/${project}/${project}_c1k.fa
+      prodigal -i ./02_Assembly/idba_ud/${project}/${project}_c1k.fa -a ./02_Assembly/idba_ud/${project}/${project}_c1k_proteins.faa -f gff -p meta -o ./02_Assembly/idba_ud/${project}/${project}_c1k.gff >> ./02_Assembly/idba_ud/logs/${project}.log 2>&1
+      idba_counts=$(grep '^>' ./02_Assembly/idba_ud/${project}/${project}_c1k_proteins.faa | wc -l )
 
-    bbmap.sh in=./01_HQ_Reads/${project}_HQ.fq.gz ref=./02_Assembly/megahit-large/${project}/${project}_c1k.fa nodisk covhist=./02_Assembly/megahit-large/${project}/covhist.txt covstats=./02_Assembly/megahit-large/${project}/covstats.txt outm=./02_Assembly/megahit-large/${project}/${project}_reads_assembled.fq.gz outu=./02_Assembly/megahit-large/${project}/${project}_reads_unassembled.fq.gz fast=t ambig=best ow >> ./02_Assembly/megahit-large/${project}/map.log 2>&1
-    megahit_match=$(grep Percent\ mapped: ./02_Assembly/megahit-large/${project}/map.log | cut -f2 -d$'\t' | tail -1 | tail -1)
-    megahit_cov=$(grep Average\ coverage: ./02_Assembly/megahit-large/${project}/map.log | cut -f2 -d$'\t' | tail -1 | tail -1)
-    megahit_Pa=$(echo "$megahit_match*$megahit_cov" | bc)
+      echo Determining metagenome content within ${project} assemblies
+      # Note that these are reads mapped to contigs > 2,000 bp.
+      #(i.e. % mapped) by mapping reads by to assembly
+      bbmap.sh in=./01_HQ_Reads/${project}_HQ.fq.gz ref=./02_Assembly/metaspades/${project}/${project}_c1k.fa nodisk covhist=./02_Assembly/metaspades/${project}/covhist.txt covstats=./02_Assembly/metaspades/${project}/covstats.txt out=./02_Assembly/metaspades/${project}/${project}_reads_assembled.fq.gz outu=./02_Assembly/metaspades/${project}/${project}_reads_unassembled.fq.gz fast=t ambig=best ow >> ./02_Assembly/metaspades/${project}/map.log 2>&1
+      spades_match=$(grep Percent\ mapped: ./02_Assembly/metaspades/${project}/map.log | cut -f2 -d$'\t' | tail -1 | tail -1)
+      spades_cov=$(grep Average\ coverage: ./02_Assembly/metaspades/${project}/map.log | cut -f2 -d$'\t' | tail -1 | tail -1)
+      spades_Pa=$(echo "$spades_match*$spades_cov" | bc)
 
-    bbmap.sh in=./01_HQ_Reads/${project}_HQ.fq.gz ref=./02_Assembly/idba_ud/${project}/${project}_c1k.fa nodisk covhist=./02_Assembly/idba_ud/${project}/covhist.txt covstats=./02_Assembly/idba_ud/${project}/covstats.txt outm=./02_Assembly/idba_ud/${project}/${project}_reads_assembled.fq.gz outu=./02_Assembly/idba_ud/${project}/${project}_reads_unassembled.fq.gz fast=t ambig=best ow >> ./02_Assembly/idba_ud/${project}/map.log 2>&1
-    idba_match=$(grep Percent\ mapped: ./02_Assembly/idba_ud/${project}/map.log | cut -f2 -d$'\t' | tail -1 | tail -1)
-    idba_cov=$(grep Average\ coverage: ./02_Assembly/idba_ud/${project}/map.log | cut -f2 -d$'\t' | tail -1 | tail -1)
-    idba_Pa=$(echo "$idba_match*$idba_cov" | bc)
+      bbmap.sh in=./01_HQ_Reads/${project}_HQ.fq.gz ref=./02_Assembly/megahit-large/${project}/${project}_c1k.fa nodisk covhist=./02_Assembly/megahit-large/${project}/covhist.txt covstats=./02_Assembly/megahit-large/${project}/covstats.txt outm=./02_Assembly/megahit-large/${project}/${project}_reads_assembled.fq.gz outu=./02_Assembly/megahit-large/${project}/${project}_reads_unassembled.fq.gz fast=t ambig=best ow >> ./02_Assembly/megahit-large/${project}/map.log 2>&1
+      megahit_match=$(grep Percent\ mapped: ./02_Assembly/megahit-large/${project}/map.log | cut -f2 -d$'\t' | tail -1 | tail -1)
+      megahit_cov=$(grep Average\ coverage: ./02_Assembly/megahit-large/${project}/map.log | cut -f2 -d$'\t' | tail -1 | tail -1)
+      megahit_Pa=$(echo "$megahit_match*$megahit_cov" | bc)
+
+      bbmap.sh in=./01_HQ_Reads/${project}_HQ.fq.gz ref=./02_Assembly/idba_ud/${project}/${project}_c1k.fa nodisk covhist=./02_Assembly/idba_ud/${project}/covhist.txt covstats=./02_Assembly/idba_ud/${project}/covstats.txt outm=./02_Assembly/idba_ud/${project}/${project}_reads_assembled.fq.gz outu=./02_Assembly/idba_ud/${project}/${project}_reads_unassembled.fq.gz fast=t ambig=best ow >> ./02_Assembly/idba_ud/${project}/map.log 2>&1
+      idba_match=$(grep Percent\ mapped: ./02_Assembly/idba_ud/${project}/map.log | cut -f2 -d$'\t' | tail -1 | tail -1)
+      idba_cov=$(grep Average\ coverage: ./02_Assembly/idba_ud/${project}/map.log | cut -f2 -d$'\t' | tail -1 | tail -1)
+      idba_Pa=$(echo "$idba_match*$idba_cov" | bc)
 
 
-    echo Creating assembly comparision for ${project}
-    echo ${project},${HQ_Reads},metaspades,${spades_stats},${spades_counts},${spades_match},${spades_cov},${spades_Pa} >> ./02_Assembly/stats/${project}_assembly_stats.csv
-    echo ${project},${HQ_Reads},megahit,${megahit_stats},${megahit_counts},${megahit_match},${megahit_cov},${megahit_Pa} >> ./02_Assembly/stats/${project}_assembly_stats.csv
-    echo ${project},${HQ_Reads},idba_ud,${idba_stats},${idba_counts},${idba_match},${idba_cov},${idba_Pa} >> ./02_Assembly/stats/${project}_assembly_stats.csv
-
+      echo Creating assembly comparision for ${project}
+      echo ${project},${HQ_Reads},metaspades,${spades_stats},${spades_counts},${spades_match},${spades_cov},${spades_Pa} >> ./02_Assembly/stats/${project}_assembly_stats.csv
+      echo ${project},${HQ_Reads},megahit,${megahit_stats},${megahit_counts},${megahit_match},${megahit_cov},${megahit_Pa} >> ./02_Assembly/stats/${project}_assembly_stats.csv
+      echo ${project},${HQ_Reads},idba_ud,${idba_stats},${idba_counts},${idba_match},${idba_cov},${idba_Pa} >> ./02_Assembly/stats/${project}_assembly_stats.csv
+    fi
   elif [[ "${HQ_Reads}" == HQ_ecc ]]
   then
-
+    # First test if any output files were already created, if not then create them.
     if test -f "./01_HQ_Reads/error_corrected/${project}_HQ_ecc.fq.gz";
     then :
     else
-    echo Using metaspades to assemble ${HQ_Reads} ${project} reads.
-    cat ./01_HQ_Reads/error_corrected/*_HQ_ecc.fq.gz > ./01_HQ_Reads/error_corrected/${project}_HQ_ecc.fq.gz
+      echo Using metaspades to assemble ${HQ_Reads} ${project} reads.
+      cat ./01_HQ_Reads/error_corrected/*_HQ_ecc.fq.gz > ./01_HQ_Reads/error_corrected/${project}_HQ_ecc.fq.gz
     fi
 
     if test -f "./02_Assembly/metaspades/${project}_ecc/scaffolds.fasta";
     then :
     else
-    mkdir -p ./02_Assembly/metaspades/${project}_ecc
-    metaspades.py -k 21,33,55,77,99,127 --12 ./01_HQ_Reads/error_corrected/${project}_HQ_ecc.fq.gz -t ${CPU} -m ${RAM} -o ./02_Assembly/metaspades/${project}_ecc >> ./02_Assembly/metaspades/logs/${project}.log 2>&1
-    cp ./02_Assembly/metaspades/${project}_ecc/scaffolds.fasta ./02_Assembly/quast/${project}/metaspades_ecc.fasta
+      mkdir -p ./02_Assembly/metaspades/${project}_ecc
+      metaspades.py -k 21,33,55,77,99,127 --12 ./01_HQ_Reads/error_corrected/${project}_HQ_ecc.fq.gz -t ${CPU} -m ${RAM} -o ./02_Assembly/metaspades/${project}_ecc >> ./02_Assembly/metaspades/logs/${project}.log 2>&1
+      cp ./02_Assembly/metaspades/${project}_ecc/scaffolds.fasta ./02_Assembly/quast/${project}/metaspades_ecc.fasta
     fi
 
     if test -f "./02_Assembly/quast/${project}/megahit_ecc.fasta";
     then :
     else
     #Assemble reads per site using megahit
-    echo Using megahit to assemble ${HQ_Reads} ${project} reads.
+      echo Using megahit to assemble ${HQ_Reads} ${project} reads.
 
-    megahit --12 ./01_HQ_Reads/error_corrected/${project}_HQ_ecc.fq.gz --presets meta-large -m ${RAM} -t ${CPU} -o ./02_Assembly/megahit-large/${project} >> ./02_Assembly/megahit-large/logs/${project}.log 2>&1
-    #megahit --12 ./01_HQ_Reads/error_corrected/${project}_HQ_ecc.fq.gz --k-min 21 --k-max 91 --k-step 10 -m ${RAM} -t ${CPU} -o ~/${project}_ecc >> ./02_Assembly/megahit-large/logs/${project}.log 2>&1
-    cp ~/${project}_ecc/final.contigs.fa ./02_Assembly/quast/${project}/megahit_ecc.fasta
-    mkdir -p ./02_Assembly/megahit-large/${project}_ecc
-    mv ~/${project}_ecc/ ./02_Assembly/megahit-large
+      megahit --12 ./01_HQ_Reads/error_corrected/${project}_HQ_ecc.fq.gz --presets meta-large -m ${RAM} -t ${CPU} -o ./02_Assembly/megahit-large/${project} >> ./02_Assembly/megahit-large/logs/${project}.log 2>&1
+      #megahit --12 ./01_HQ_Reads/error_corrected/${project}_HQ_ecc.fq.gz --k-min 21 --k-max 91 --k-step 10 -m ${RAM} -t ${CPU} -o ~/${project}_ecc >> ./02_Assembly/megahit-large/logs/${project}.log 2>&1
+      cp ~/${project}_ecc/final.contigs.fa ./02_Assembly/quast/${project}/megahit_ecc.fasta
+      mkdir -p ./02_Assembly/megahit-large/${project}_ecc
+      mv ~/${project}_ecc/ ./02_Assembly/megahit-large
     fi
 
     if test -f "./01_HQ_Reads/error_corrected/${project}_HQ_ecc.fa";
     then :
     else
-    #IDBA can only take fasta files as input; therefore, fastq.gz files must be reformated to fasta files
-    reformat.sh in=./01_HQ_Reads/error_corrected/${project}_HQ_ecc.fq.gz out=./01_HQ_Reads/error_corrected/${project}_HQ_ecc.fa ow=t >> ./02_Assembly/idba_ud/logs/${project}.log 2>&1
-    #fq2fa --paired ./01_HQ_Reads/error_corrected/${project}_HQ_ecc.fq.gz ./01_HQ_Reads/error_corrected/${project}_HQ_ecc.fa
+      #IDBA can only take fasta files as input; therefore, fastq.gz files must be reformated to fasta files
+      reformat.sh in=./01_HQ_Reads/error_corrected/${project}_HQ_ecc.fq.gz out=./01_HQ_Reads/error_corrected/${project}_HQ_ecc.fa ow=t >> ./02_Assembly/idba_ud/logs/${project}.log 2>&1
+      #fq2fa --paired ./01_HQ_Reads/error_corrected/${project}_HQ_ecc.fq.gz ./01_HQ_Reads/error_corrected/${project}_HQ_ecc.fa
     fi
 
     if test -f "./02_Assembly/idba_ud/${project}_ecc/scaffold.fa";
     then :
     else
-    # #Assemble reads per site using idba_ud
-    echo Using idba to assemble ${HQ_Reads} ${project} reads.
+      # #Assemble reads per site using idba_ud
+      echo Using idba to assemble ${HQ_Reads} ${project} reads.
 
-    mkdir -p ./02_Assembly/idba_ud/${project}_ecc
-    idba_ud -r ./01_HQ_Reads/error_corrected/${project}_HQ_ecc.fa --num_threads=${CPU} --pre_correction -o ./02_Assembly/idba_ud/${project}_ecc >> ./02_Assembly/idba_ud/logs/${project}.log 2>&1
-    cp ./02_Assembly/idba_ud/${project}_ecc/scaffold.fa ./02_Assembly/quast/${project}/idba_ecc.fasta
+      mkdir -p ./02_Assembly/idba_ud/${project}_ecc
+      idba_ud -r ./01_HQ_Reads/error_corrected/${project}_HQ_ecc.fa --num_threads=${CPU} --pre_correction -o ./02_Assembly/idba_ud/${project}_ecc >> ./02_Assembly/idba_ud/logs/${project}.log 2>&1
+      cp ./02_Assembly/idba_ud/${project}_ecc/scaffold.fa ./02_Assembly/quast/${project}/idba_ecc.fasta
     fi
     # --- Evaluation ---
-    echo metagenome_id,reads,assembler,n_contigs,contig_bp,gap_pct,ctg_L50,ctg_max,gene_counts,mapped_pct,avg_cov,assembly_performance >> ./02_Assembly/stats/${project}_assembly_stats.csv
-    echo Evaluating ${project} assemblies with AssemblyStats
-    stats.sh ./02_Assembly/metaspades/${project}_ecc/scaffolds.fasta minscaf=1000 format=3 -Xmx${RAM}G ow=t out=./02_Assembly/metaspades/${project}_ecc/stats.txt
-    spades_stats=$(cat ./02_Assembly/metaspades/${project}_ecc/stats.txt | cut -f2,4,5,9,15 -d$'\t' | sed '2q;d' | sed 's/\t/,/g')
-    stats.sh ./02_Assembly/megahit-large/${project}_ecc/final.contigs.fa minscaf=1000 format=3 -Xmx${RAM}G ow=t out=./02_Assembly/megahit-large/${project}_ecc/stats.txt
-    megahit_stats=$(cat ./02_Assembly/megahit-large/${project}_ecc/stats.txt | cut -f2,4,5,9,15 -d$'\t' | sed '2q;d' | sed 's/\t/,/g')
-    stats.sh ./02_Assembly/idba_ud/${project}_ecc/scaffold.fa minscaf=1000 format=3 -Xmx${RAM}G ow=t out=./02_Assembly/idba_ud/${project}_ecc/stats.txt
-    idba_stats=$(cat ./02_Assembly/idba_ud/${project}_ecc/stats.txt | cut -f2,4,5,9,15 -d$'\t' | sed '2q;d' | sed 's/\t/,/g')
-    #Evaluate assemblies with Quast (leave out "-R ref.fa if you don't have a reference)
+    if test -f "./02_Assembly/stats/${project}_assembly_stats.csv"; then :
+    else
+      echo metagenome_id,reads,assembler,n_contigs,contig_bp,gap_pct,ctg_L50,ctg_max,gene_counts,mapped_pct,avg_cov,assembly_performance >> ./02_Assembly/stats/${project}_assembly_stats.csv
+      echo Evaluating ${project} assemblies with AssemblyStats
+      stats.sh ./02_Assembly/metaspades/${project}_ecc/scaffolds.fasta minscaf=1000 format=3 -Xmx${RAM}G ow=t out=./02_Assembly/metaspades/${project}_ecc/stats.txt
+      spades_stats=$(cat ./02_Assembly/metaspades/${project}_ecc/stats.txt | cut -f2,4,5,9,15 -d$'\t' | sed '2q;d' | sed 's/\t/,/g')
+      stats.sh ./02_Assembly/megahit-large/${project}_ecc/final.contigs.fa minscaf=1000 format=3 -Xmx${RAM}G ow=t out=./02_Assembly/megahit-large/${project}_ecc/stats.txt
+      megahit_stats=$(cat ./02_Assembly/megahit-large/${project}_ecc/stats.txt | cut -f2,4,5,9,15 -d$'\t' | sed '2q;d' | sed 's/\t/,/g')
+      stats.sh ./02_Assembly/idba_ud/${project}_ecc/scaffold.fa minscaf=1000 format=3 -Xmx${RAM}G ow=t out=./02_Assembly/idba_ud/${project}_ecc/stats.txt
+      idba_stats=$(cat ./02_Assembly/idba_ud/${project}_ecc/stats.txt | cut -f2,4,5,9,15 -d$'\t' | sed '2q;d' | sed 's/\t/,/g')
+      #Evaluate assemblies with Quast (leave out "-R ref.fa if you don't have a reference)
 
-    echo Predicting prokaryotic genes in each ${project} assembly
-    #Count gene predictions for prokaryotes using prodigal for each assembly
-    python ~/bin/LengthFilter.py ./02_Assembly/metaspades/${project}_ecc/scaffolds.fasta -m 1000 > ./02_Assembly/metaspades/${project}_ecc/${project}_c1k.fa
-    prodigal -i ./02_Assembly/metaspades/${project}_ecc/${project}_c1k.fa -a ./02_Assembly/metaspades/${project}_ecc/${project}_c1k_proteins.faa -f gff -p meta -o ./02_Assembly/metaspades/${project}_ecc/${project}_c1k.gff >> ./02_Assembly/metaspades/logs/${project}.log 2>&1
-    spades_counts=$(grep '^>' ./02_Assembly/metaspades/${project}_ecc/${project}_c1k_proteins.faa | wc -l )
+      echo Predicting prokaryotic genes in each ${project} assembly
+      #Count gene predictions for prokaryotes using prodigal for each assembly
+      python ~/bin/LengthFilter.py ./02_Assembly/metaspades/${project}_ecc/scaffolds.fasta -m 1000 > ./02_Assembly/metaspades/${project}_ecc/${project}_c1k.fa
+      prodigal -i ./02_Assembly/metaspades/${project}_ecc/${project}_c1k.fa -a ./02_Assembly/metaspades/${project}_ecc/${project}_c1k_proteins.faa -f gff -p meta -o ./02_Assembly/metaspades/${project}_ecc/${project}_c1k.gff >> ./02_Assembly/metaspades/logs/${project}.log 2>&1
+      spades_counts=$(grep '^>' ./02_Assembly/metaspades/${project}_ecc/${project}_c1k_proteins.faa | wc -l )
 
-    python ~/bin/LengthFilter.py ./02_Assembly/megahit-large/${project}_ecc/final.contigs.fa -m 1000 > ./02_Assembly/megahit-large/${project}_ecc/${project}_c1k.fa
-    prodigal -i ./02_Assembly/megahit-large/${project}_ecc/${project}_c1k.fa -a ./02_Assembly/megahit-large/${project}_ecc/${project}_c1k_proteins.faa -f gff -p meta -o ./02_Assembly/megahit-large/${project}_ecc/${project}_c1k.gff >> ./02_Assembly/megahit-large/logs/${project}.log 2>&1
-    megahit_counts=$(grep '^>' ./02_Assembly/megahit-large/${project}_ecc/${project}_c1k_proteins.faa | wc -l )
+      python ~/bin/LengthFilter.py ./02_Assembly/megahit-large/${project}_ecc/final.contigs.fa -m 1000 > ./02_Assembly/megahit-large/${project}_ecc/${project}_c1k.fa
+      prodigal -i ./02_Assembly/megahit-large/${project}_ecc/${project}_c1k.fa -a ./02_Assembly/megahit-large/${project}_ecc/${project}_c1k_proteins.faa -f gff -p meta -o ./02_Assembly/megahit-large/${project}_ecc/${project}_c1k.gff >> ./02_Assembly/megahit-large/logs/${project}.log 2>&1
+      megahit_counts=$(grep '^>' ./02_Assembly/megahit-large/${project}_ecc/${project}_c1k_proteins.faa | wc -l )
 
-    python ~/bin/LengthFilter.py ./02_Assembly/idba_ud/${project}_ecc/scaffold.fa -m 1000 > ./02_Assembly/idba_ud/${project}_ecc/${project}_c1k.fa
-    prodigal -i ./02_Assembly/idba_ud/${project}_ecc/${project}_c1k.fa -a ./02_Assembly/idba_ud/${project}_ecc/${project}_c1k_proteins.faa -f gff -p meta -o ./02_Assembly/idba_ud/${project}_ecc/${project}_c1k.gff >> ./02_Assembly/idba_ud/logs/${project}.log 2>&1
-    idba_counts=$(grep '^>' ./02_Assembly/idba_ud/${project}_ecc/${project}_c1k_proteins.faa | wc -l )
+      python ~/bin/LengthFilter.py ./02_Assembly/idba_ud/${project}_ecc/scaffold.fa -m 1000 > ./02_Assembly/idba_ud/${project}_ecc/${project}_c1k.fa
+      prodigal -i ./02_Assembly/idba_ud/${project}_ecc/${project}_c1k.fa -a ./02_Assembly/idba_ud/${project}_ecc/${project}_c1k_proteins.faa -f gff -p meta -o ./02_Assembly/idba_ud/${project}_ecc/${project}_c1k.gff >> ./02_Assembly/idba_ud/logs/${project}.log 2>&1
+      idba_counts=$(grep '^>' ./02_Assembly/idba_ud/${project}_ecc/${project}_c1k_proteins.faa | wc -l )
 
-    echo Determining metagenome content within ${project} assemblies
-    # Note that these are reads mapped to contigs > 2,000 bp.
-    #(i.e. % mapped) by mapping reads by to assembly
-    bbmap.sh in=./01_HQ_Reads/${project}_HQ.fq.gz ref=./02_Assembly/metaspades/${project}_ecc/${project}_c1k.fa nodisk covhist=./02_Assembly/metaspades/${project}_ecc/covhist.txt covstats=./02_Assembly/metaspades/${project}_ecc/covstats.txt out=./02_Assembly/metaspades/${project}_ecc/${project}_reads_assembled.fq.gz outu=./02_Assembly/metaspades/${project}_ecc/${project}_reads_unassembled.fq.gz fast=t ambig=best >> ./02_Assembly/metaspades/${project}_ecc/map.log 2>&1
-    spades_match=$(grep Percent\ mapped: ./02_Assembly/metaspades/${project}_ecc/map.log | cut -f2 -d$'\t' | tail -1 | tail -1)
-    spades_cov=$(grep Average\ coverage: ./02_Assembly/metaspades/${project}_ecc/map.log | cut -f2 -d$'\t' | tail -1 | tail -1)
-    spades_Pa=$(echo "$spades_match*$spades_cov" | bc)
+      echo Determining metagenome content within ${project} assemblies
+      # Note that these are reads mapped to contigs > 2,000 bp.
+      #(i.e. % mapped) by mapping reads by to assembly
+      bbmap.sh in=./01_HQ_Reads/${project}_HQ.fq.gz ref=./02_Assembly/metaspades/${project}_ecc/${project}_c1k.fa nodisk covhist=./02_Assembly/metaspades/${project}_ecc/covhist.txt covstats=./02_Assembly/metaspades/${project}_ecc/covstats.txt out=./02_Assembly/metaspades/${project}_ecc/${project}_reads_assembled.fq.gz outu=./02_Assembly/metaspades/${project}_ecc/${project}_reads_unassembled.fq.gz fast=t ambig=best >> ./02_Assembly/metaspades/${project}_ecc/map.log 2>&1
+      spades_match=$(grep Percent\ mapped: ./02_Assembly/metaspades/${project}_ecc/map.log | cut -f2 -d$'\t' | tail -1 | tail -1)
+      spades_cov=$(grep Average\ coverage: ./02_Assembly/metaspades/${project}_ecc/map.log | cut -f2 -d$'\t' | tail -1 | tail -1)
+      spades_Pa=$(echo "$spades_match*$spades_cov" | bc)
 
-    bbmap.sh in=./01_HQ_Reads/${project}_HQ.fq.gz ref=./02_Assembly/megahit-large/${project}_ecc/${project}_c1k.fa nodisk covhist=./02_Assembly/megahit-large/${project}_ecc/covhist.txt covstats=./02_Assembly/megahit-large/${project}_ecc/covstats.txt outm=./02_Assembly/megahit-large/${project}_ecc/${project}_reads_assembled.fq.gz outu=./02_Assembly/megahit-large/${project}_ecc/${project}_reads_unassembled.fq.gz fast=t ambig=best >> ./02_Assembly/megahit-large/${project}_ecc/map.log 2>&1
-    megahit_match=$(grep Percent\ mapped: ./02_Assembly/megahit-large/${project}_ecc/map.log | cut -f2 -d$'\t' | tail -1)
-    megahit_cov=$(grep Average\ coverage: ./02_Assembly/megahit-large/${project}_ecc/map.log | cut -f2 -d$'\t' | tail -1)
-    megahit_Pa=$(echo "$megahit_match*$megahit_cov" | bc)
+      bbmap.sh in=./01_HQ_Reads/${project}_HQ.fq.gz ref=./02_Assembly/megahit-large/${project}_ecc/${project}_c1k.fa nodisk covhist=./02_Assembly/megahit-large/${project}_ecc/covhist.txt covstats=./02_Assembly/megahit-large/${project}_ecc/covstats.txt outm=./02_Assembly/megahit-large/${project}_ecc/${project}_reads_assembled.fq.gz outu=./02_Assembly/megahit-large/${project}_ecc/${project}_reads_unassembled.fq.gz fast=t ambig=best >> ./02_Assembly/megahit-large/${project}_ecc/map.log 2>&1
+      megahit_match=$(grep Percent\ mapped: ./02_Assembly/megahit-large/${project}_ecc/map.log | cut -f2 -d$'\t' | tail -1)
+      megahit_cov=$(grep Average\ coverage: ./02_Assembly/megahit-large/${project}_ecc/map.log | cut -f2 -d$'\t' | tail -1)
+      megahit_Pa=$(echo "$megahit_match*$megahit_cov" | bc)
 
-    bbmap.sh in=./01_HQ_Reads/${project}_HQ.fq.gz ref=./02_Assembly/idba_ud/${project}_ecc/${project}_c1k.fa nodisk covhist=./02_Assembly/idba_ud/${project}_ecc/covhist.txt covstats=./02_Assembly/idba_ud/${project}_ecc/covstats.txt outm=./02_Assembly/idba_ud/${project}_ecc/${project}_reads_assembled.fq.gz outu=./02_Assembly/idba_ud/${project}_ecc/${project}_reads_unassembled.fq.gz fast=t ambig=best >> ./02_Assembly/idba_ud/${project}_ecc/map.log 2>&1
-    idba_match=$(grep Percent\ mapped: ./02_Assembly/idba_ud/${project}_ecc/map.log | cut -f2 -d$'\t' | tail -1)
-    idba_cov=$(grep Average\ coverage: ./02_Assembly/idba_ud/${project}_ecc/map.log | cut -f2 -d$'\t' | tail -1)
-    idba_Pa=$(echo "$idba_match*$idba_cov" | bc)
+      bbmap.sh in=./01_HQ_Reads/${project}_HQ.fq.gz ref=./02_Assembly/idba_ud/${project}_ecc/${project}_c1k.fa nodisk covhist=./02_Assembly/idba_ud/${project}_ecc/covhist.txt covstats=./02_Assembly/idba_ud/${project}_ecc/covstats.txt outm=./02_Assembly/idba_ud/${project}_ecc/${project}_reads_assembled.fq.gz outu=./02_Assembly/idba_ud/${project}_ecc/${project}_reads_unassembled.fq.gz fast=t ambig=best >> ./02_Assembly/idba_ud/${project}_ecc/map.log 2>&1
+      idba_match=$(grep Percent\ mapped: ./02_Assembly/idba_ud/${project}_ecc/map.log | cut -f2 -d$'\t' | tail -1)
+      idba_cov=$(grep Average\ coverage: ./02_Assembly/idba_ud/${project}_ecc/map.log | cut -f2 -d$'\t' | tail -1)
+      idba_Pa=$(echo "$idba_match*$idba_cov" | bc)
 
-    echo Creating assembly comparision for ${project}
-    echo ${project},${HQ_Reads},metaspades,${spades_stats},${spades_counts},${spades_match},${spades_cov},${spades_Pa} >> ./02_Assembly/stats/${project}_assembly_stats.csv
-    echo ${project},${HQ_Reads},megahit,${megahit_stats},${megahit_counts},${megahit_match},${megahit_cov},${megahit_Pa} >> ./02_Assembly/stats/${project}_assembly_stats.csv
-    echo ${project},${HQ_Reads},idba_ud,${idba_stats},${idba_counts},${idba_match},${idba_cov},${idba_Pa} >> ./02_Assembly/stats/${project}_assembly_stats.csv
-
+      echo Creating assembly comparision for ${project}
+      echo ${project},${HQ_Reads},metaspades,${spades_stats},${spades_counts},${spades_match},${spades_cov},${spades_Pa} >> ./02_Assembly/stats/${project}_assembly_stats.csv
+      echo ${project},${HQ_Reads},megahit,${megahit_stats},${megahit_counts},${megahit_match},${megahit_cov},${megahit_Pa} >> ./02_Assembly/stats/${project}_assembly_stats.csv
+      echo ${project},${HQ_Reads},idba_ud,${idba_stats},${idba_counts},${idba_match},${idba_cov},${idba_Pa} >> ./02_Assembly/stats/${project}_assembly_stats.csv
+    fi
   elif [[ "${HQ_Reads}" == HQ_merged ]]
   then
 
     if test -f "./01_HQ_Reads/merged_reads/${project}_HQ_merged.fq.gz";
     then :
     else
-
-    cat ./01_HQ_Reads/merged_reads/*_HQ_merged.fq.gz > ./01_HQ_Reads/merged_reads/${project}_HQ_merged.fq.gz
-    cat ./01_HQ_Reads/merged_reads/*_HQ_unmerged.fq.gz > ./01_HQ_Reads/merged_reads/${project}_HQ_unmerged.fq.gz
+      cat ./01_HQ_Reads/merged_reads/*_HQ_merged.fq.gz > ./01_HQ_Reads/merged_reads/${project}_HQ_merged.fq.gz
+      cat ./01_HQ_Reads/merged_reads/*_HQ_unmerged.fq.gz > ./01_HQ_Reads/merged_reads/${project}_HQ_unmerged.fq.gz
     fi
 
     if test -f "./02_Assembly/metaspades/${project}_merged/scaffolds.fasta";
     then :
     else
-    echo Using metaspades to assemble ${HQ_Reads} ${project} reads.
-    # Assemble using merged/unmerged reads
-    mkdir -p ./02_Assembly/metaspades/${project}_merged
-    metaspades.py  --only-assembler -k 21,33,55,77,99,127 --merged ./01_HQ_Reads/merged_reads/${project}_HQ_merged.fq.gz --12 ./01_HQ_Reads/merged_reads/${project}_HQ_unmerged.fq.gz -t ${CPU} -m ${RAM} -o ./02_Assembly/metaspades/${project}_merged >> ./02_Assembly/metaspades/logs/${project}.log 2>&1
-    cp ./02_Assembly/metaspades/${project}_merged/scaffolds.fasta ./02_Assembly/quast/${project}/metaspades_merged.fasta
+      echo Using metaspades to assemble ${HQ_Reads} ${project} reads.
+      # Assemble using merged/unmerged reads
+      mkdir -p ./02_Assembly/metaspades/${project}_merged
+      metaspades.py  --only-assembler -k 21,33,55,77,99,127 --merged ./01_HQ_Reads/merged_reads/${project}_HQ_merged.fq.gz --12 ./01_HQ_Reads/merged_reads/${project}_HQ_unmerged.fq.gz -t ${CPU} -m ${RAM} -o ./02_Assembly/metaspades/${project}_merged >> ./02_Assembly/metaspades/logs/${project}.log 2>&1
+      cp ./02_Assembly/metaspades/${project}_merged/scaffolds.fasta ./02_Assembly/quast/${project}/metaspades_merged.fasta
     fi
 
     if test -f "./02_Assembly/quast/${project}/megahit_merged.fasta";
     then :
     else
-    echo Using megahit to assemble ${HQ_Reads} ${project} reads.
-    megahit -r ./01_HQ_Reads/merged_reads/${project}_HQ_merged.fq.gz --12 ./01_HQ_Reads/merged_reads/${project}_HQ_unmerged.fq.gz --presets meta-large -m ${RAM} -t ${CPU} -o ~/${project}_merged >> ./02_Assembly/megahit-large/logs/${project}.log 2>&1
-    #megahit -r ./01_HQ_Reads/merged_reads/${project}_HQ_merged.fq.gz --12 ./01_HQ_Reads/merged_reads/${project}_HQ_unmerged.fq.gz --k-min 21 --k-max 91 --k-step 10 -m ${RAM} -t ${CPU} -o ~/${project}_merged >> ./02_Assembly/megahit-large/logs/${project}.log 2>&1
-    cp ~/${project}_merged/final.contigs.fa ./02_Assembly/quast/${project}/megahit_merged.fasta
-    mkdir -p ./02_Assembly/megahit-large/${project}_merged/
-    mv ~/${project}_merged/ ./02_Assembly/megahit-large/
+      echo Using megahit to assemble ${HQ_Reads} ${project} reads.
+      megahit -r ./01_HQ_Reads/merged_reads/${project}_HQ_merged.fq.gz --12 ./01_HQ_Reads/merged_reads/${project}_HQ_unmerged.fq.gz --presets meta-large -m ${RAM} -t ${CPU} -o ~/${project}_merged >> ./02_Assembly/megahit-large/logs/${project}.log 2>&1
+      #megahit -r ./01_HQ_Reads/merged_reads/${project}_HQ_merged.fq.gz --12 ./01_HQ_Reads/merged_reads/${project}_HQ_unmerged.fq.gz --k-min 21 --k-max 91 --k-step 10 -m ${RAM} -t ${CPU} -o ~/${project}_merged >> ./02_Assembly/megahit-large/logs/${project}.log 2>&1
+      cp ~/${project}_merged/final.contigs.fa ./02_Assembly/quast/${project}/megahit_merged.fasta
+      mkdir -p ./02_Assembly/megahit-large/${project}_merged/
+      mv ~/${project}_merged/ ./02_Assembly/megahit-large/
+      echo idba_ud does not assemble merged reads and will not be used for comparison.
     fi
 
-    echo idba_ud does not assemble merged reads and will not be used for comparison.
+    if test -f "./02_Assembly/stats/${project}_assembly_stats.csv"; then :
+    else
+      echo metagenome_id,reads,assembler,n_contigs,contig_bp,gap_pct,ctg_L50,ctg_max,gene_counts,mapped_pct,avg_cov,assembly_performance >> ./02_Assembly/stats/${project}_assembly_stats.csv
+      echo Evaluating ${project} assemblies with AssemblyStats
+      stats.sh ./02_Assembly/metaspades/${project}_merged/scaffolds.fasta minscaf=1000 format=3 -Xmx${RAM}G ow=t out=./02_Assembly/metaspades/${project}_merged/stats.txt
+      spades_stats=$(cat ./02_Assembly/metaspades/${project}_merged/stats.txt | cut -f2,4,5,9,15 -d$'\t' | sed '2q;d' | sed 's/\t/,/g')
+      stats.sh ./02_Assembly/megahit-large/${project}_merged/final.contigs.fa minscaf=1000 format=3 -Xmx${RAM}G ow=t out=./02_Assembly/megahit-large/${project}_merged/stats.txt
+      megahit_stats=$(cat ./02_Assembly/megahit-large/${project}_merged/stats.txt | cut -f2,4,5,9,15 -d$'\t' | sed '2q;d' | sed 's/\t/,/g')
+      #Evaluate assemblies with Quast (leave out "-R ref.fa if you don't have a reference)
 
-    echo metagenome_id,reads,assembler,n_contigs,contig_bp,gap_pct,ctg_L50,ctg_max,gene_counts,mapped_pct,avg_cov,assembly_performance >> ./02_Assembly/stats/${project}_assembly_stats.csv
-    echo Evaluating ${project} assemblies with AssemblyStats
-    stats.sh ./02_Assembly/metaspades/${project}_merged/scaffolds.fasta minscaf=1000 format=3 -Xmx${RAM}G ow=t out=./02_Assembly/metaspades/${project}_merged/stats.txt
-    spades_stats=$(cat ./02_Assembly/metaspades/${project}_merged/stats.txt | cut -f2,4,5,9,15 -d$'\t' | sed '2q;d' | sed 's/\t/,/g')
-    stats.sh ./02_Assembly/megahit-large/${project}_merged/final.contigs.fa minscaf=1000 format=3 -Xmx${RAM}G ow=t out=./02_Assembly/megahit-large/${project}_merged/stats.txt
-    megahit_stats=$(cat ./02_Assembly/megahit-large/${project}_merged/stats.txt | cut -f2,4,5,9,15 -d$'\t' | sed '2q;d' | sed 's/\t/,/g')
-    #Evaluate assemblies with Quast (leave out "-R ref.fa if you don't have a reference)
+      echo Predicting prokaryotic genes in each ${project} assembly
+      #Count gene predictions for prokaryotes using prodigal for each assembly
+      python ~/bin/LengthFilter.py ./02_Assembly/metaspades/${project}_merged/scaffolds.fasta -m 1000 > ./02_Assembly/metaspades/${project}_merged/${project}_c1k.fa
+      prodigal -i ./02_Assembly/metaspades/${project}_merged/${project}_c1k.fa -a ./02_Assembly/metaspades/${project}_merged/${project}_c1k_proteins.faa -f gff -p meta -o ./02_Assembly/metaspades/${project}_merged/${project}_c1k.gff >> ./02_Assembly/metaspades/logs/${project}.log 2>&1
+      spades_counts=$(grep '^>' ./02_Assembly/metaspades/${project}_merged/${project}_c1k_proteins.faa | wc -l )
 
-    echo Predicting prokaryotic genes in each ${project} assembly
-    #Count gene predictions for prokaryotes using prodigal for each assembly
-    python ~/bin/LengthFilter.py ./02_Assembly/metaspades/${project}_merged/scaffolds.fasta -m 1000 > ./02_Assembly/metaspades/${project}_merged/${project}_c1k.fa
-    prodigal -i ./02_Assembly/metaspades/${project}_merged/${project}_c1k.fa -a ./02_Assembly/metaspades/${project}_merged/${project}_c1k_proteins.faa -f gff -p meta -o ./02_Assembly/metaspades/${project}_merged/${project}_c1k.gff >> ./02_Assembly/metaspades/logs/${project}.log 2>&1
-    spades_counts=$(grep '^>' ./02_Assembly/metaspades/${project}_merged/${project}_c1k_proteins.faa | wc -l )
+      python ~/bin/LengthFilter.py ./02_Assembly/megahit-large/${project}_merged/final.contigs.fa -m 1000 > ./02_Assembly/megahit-large/${project}_merged/${project}_c1k.fa
+      prodigal -i ./02_Assembly/megahit-large/${project}_merged/${project}_c1k.fa -a ./02_Assembly/megahit-large/${project}_merged/${project}_c1k_proteins.faa -f gff -p meta -o ./02_Assembly/megahit-large/${project}_merged/${project}_c1k.gff >> ./02_Assembly/megahit-large/logs/${project}.log 2>&1
+      megahit_counts=$(grep '^>' ./02_Assembly/megahit-large/${project}_merged/${project}_c1k_proteins.faa | wc -l )
 
-    python ~/bin/LengthFilter.py ./02_Assembly/megahit-large/${project}_merged/final.contigs.fa -m 1000 > ./02_Assembly/megahit-large/${project}_merged/${project}_c1k.fa
-    prodigal -i ./02_Assembly/megahit-large/${project}_merged/${project}_c1k.fa -a ./02_Assembly/megahit-large/${project}_merged/${project}_c1k_proteins.faa -f gff -p meta -o ./02_Assembly/megahit-large/${project}_merged/${project}_c1k.gff >> ./02_Assembly/megahit-large/logs/${project}.log 2>&1
-    megahit_counts=$(grep '^>' ./02_Assembly/megahit-large/${project}_merged/${project}_c1k_proteins.faa | wc -l )
+      echo Determining metagenome content within ${project} assemblies
+      # Note that these are reads mapped to contigs > 2,000 bp.
+      #(i.e. % mapped) by mapping reads by to assembly
+      if test -f "./01_HQ_Reads/${project}_HQ.fq.gz"; then :
+      else
+        cat ./01_HQ_Reads/*_HQ.fq.gz > ./01_HQ_Reads/${project}_HQ.fq.gz
+      fi
+      bbmap.sh in=./01_HQ_Reads/${project}_HQ.fq.gz ref=./02_Assembly/metaspades/${project}_merged/${project}_c1k.fa nodisk covhist=./02_Assembly/metaspades/${project}_merged/covhist.txt covstats=./02_Assembly/metaspades/${project}_merged/covstats.txt out=./02_Assembly/metaspades/${project}_merged/${project}_reads_assembled.fq.gz outu=./02_Assembly/metaspades/${project}_merged/${project}_reads_unassembled.fq.gz fast=t ambig=best >> ./02_Assembly/metaspades/${project}_merged/map.log 2>&1
+      spades_match=$(grep Percent\ mapped: ./02_Assembly/metaspades/${project}_merged/map.log | cut -f2 -d$'\t' | tail -1)
+      spades_cov=$(grep Average\ coverage: ./02_Assembly/metaspades/${project}_merged/map.log | cut -f2 -d$'\t' | tail -1)
+      spades_Pa=$(echo "$spades_match*$spades_cov" | bc)
 
-    echo Determining metagenome content within ${project} assemblies
-    # Note that these are reads mapped to contigs > 2,000 bp.
-    #(i.e. % mapped) by mapping reads by to assembly
-    bbmap.sh in=./01_HQ_Reads/${project}_HQ.fq.gz ref=./02_Assembly/metaspades/${project}_merged/${project}_c1k.fa nodisk covhist=./02_Assembly/metaspades/${project}_merged/covhist.txt covstats=./02_Assembly/metaspades/${project}_merged/covstats.txt out=./02_Assembly/metaspades/${project}_merged/${project}_reads_assembled.fq.gz outu=./02_Assembly/metaspades/${project}_merged/${project}_reads_unassembled.fq.gz fast=t ambig=best >> ./02_Assembly/metaspades/${project}_merged/map.log 2>&1
-    spades_match=$(grep Percent\ mapped: ./02_Assembly/metaspades/${project}_merged/map.log | cut -f2 -d$'\t' | tail -1)
-    spades_cov=$(grep Average\ coverage: ./02_Assembly/metaspades/${project}_merged/map.log | cut -f2 -d$'\t' | tail -1)
-    spades_Pa=$(echo "$spades_match*$spades_cov" | bc)
+      bbmap.sh in=./01_HQ_Reads/${project}_HQ.fq.gz ref=./02_Assembly/megahit-large/${project}_merged/${project}_c1k.fa nodisk covhist=./02_Assembly/megahit-large/${project}_merged/covhist.txt covstats=./02_Assembly/megahit-large/${project}_merged/covstats.txt outm=./02_Assembly/megahit-large/${project}_merged/${project}_reads_assembled.fq.gz outu=./02_Assembly/megahit-large/${project}_merged/${project}_reads_unassembled.fq.gz fast=t ambig=best >> ./02_Assembly/megahit-large/${project}_merged/map.log 2>&1
+      megahit_match=$(grep Percent\ mapped: ./02_Assembly/megahit-large/${project}_merged/map.log | cut -f2 -d$'\t' | tail -1)
+      megahit_cov=$(grep Average\ coverage: ./02_Assembly/megahit-large/${project}_merged/map.log | cut -f2 -d$'\t' | tail -1)
+      metahit_Pa=$(echo "$megahit_match*$megahit_cov" | bc)
 
-    bbmap.sh in=./01_HQ_Reads/${project}_HQ.fq.gz ref=./02_Assembly/megahit-large/${project}_merged/${project}_c1k.fa nodisk covhist=./02_Assembly/megahit-large/${project}_merged/covhist.txt covstats=./02_Assembly/megahit-large/${project}_merged/covstats.txt outm=./02_Assembly/megahit-large/${project}_merged/${project}_reads_assembled.fq.gz outu=./02_Assembly/megahit-large/${project}_merged/${project}_reads_unassembled.fq.gz fast=t ambig=best >> ./02_Assembly/megahit-large/${project}_merged/map.log 2>&1
-    megahit_match=$(grep Percent\ mapped: ./02_Assembly/megahit-large/${project}_merged/map.log | cut -f2 -d$'\t' | tail -1)
-    megahit_cov=$(grep Average\ coverage: ./02_Assembly/megahit-large/${project}_merged/map.log | cut -f2 -d$'\t' | tail -1)
-    metahit_Pa=$(echo "$megahit_match*$megahit_cov" | bc)
-
-    echo Creating assembly comparision for ${project}
-    echo ${project},${HQ_Reads},metaspades,${spades_stats},${spades_counts},${spades_match},${spades_cov},${spades_Pa} >> ./02_Assembly/stats/${project}_assembly_stats.csv
-    echo ${project},${HQ_Reads},megahit,${megahit_stats},${megahit_counts},${megahit_match},${megahit_cov},${megahit_Pa} >> ./02_Assembly/stats/${project}_assembly_stats.csv
-    echo ${project},${HQ_Reads},idba_ud,${idba_stats},${idba_counts},${idba_match},${idba_cov},NA >> ./02_Assembly/stats/${project}_assembly_stats.csv
-
+      echo Creating assembly comparision for ${project}
+      echo ${project},${HQ_Reads},metaspades,${spades_stats},${spades_counts},${spades_match},${spades_cov},${spades_Pa} >> ./02_Assembly/stats/${project}_assembly_stats.csv
+      echo ${project},${HQ_Reads},megahit,${megahit_stats},${megahit_counts},${megahit_match},${megahit_cov},${megahit_Pa} >> ./02_Assembly/stats/${project}_assembly_stats.csv
+      echo ${project},${HQ_Reads},idba_ud,${idba_stats},${idba_counts},${idba_match},${idba_cov},NA >> ./02_Assembly/stats/${project}_assembly_stats.csv
+    fi
   elif [[ "${HQ_Reads}" == Skip ]]
   then :
   fi
-
-  # --- Evaluation ---
+  ######################
+  #### ASSEMBLY QC #####
+  ######################
   read -r -p "Would you like to evaluate the quality of all the assemblies? yes or no:  " quast || exit 100
-
   if [[ "${quast}" == yes ]]; then
     echo Evaluating ${project} assemblies
 
@@ -899,12 +884,14 @@ if [[ "${coassemble}" == yes ]]; then
     ~/GitHub/quast/metaquast.py -f -m 1000 -o ./02_Assembly/quast/${project} ./02_Assembly/quast/${project}/*.fasta >> ./02_Assembly/quast/${project}.log 2>&1
   elif [[ "${quast}" == no ]]; then :
   fi
+  cut -f2,3,12 -d ',' ./02_Assembly/stats/${project}_assembly_stats.csv
 
+  # Pick which assembly you like best by comparing assembly_stats.csv
   read -r -p "Analyze the ./02_Assembly/stats/${project}_assembly_stats.csv and ./02_Assembly/quast/${project}/report.html and determine which ${project} assembly is best. Please enter the absoute path to the assembly.fasta file:  " best_assembly || exit 100
-  # #Pick which assembly you like best by comparing assembly_stats.csv
-
+  ###################
+  #### TAXONOMY #####
+  ###################
   read -r -p "Would you like to estimate the taxonomy of your metagenome? yes or no : " taxa || exit 100
-
   if [[ "${taxa}" == yes ]]; then
     # For my analysis, 58 of the best assemblies were megahit and 2 were metaspades.
     mkdir -p ./02_Assembly/taxonomy
@@ -913,25 +900,25 @@ if [[ "${coassemble}" == yes ]]; then
     sendsketch.sh in=${best_assembly} nt >> ./02_Assembly/taxonomy/${project}_nt.tsv 2>&1
   elif [[ "${taxa}" == no ]]; then :
   fi
-
+  # Deactivate the assembly conda environment
   conda deactivate
-
+  ###################
+  ##### ANVI'O ######
+  ###################
   read -r -p "Would you like to analyze your metagenome using anvi'o? yes or no: " anvio || exit 100
-
   if [[ "${anvio}" == yes ]]; then
     #Or, try to determine taxonomy on a per-contig basis.  If this is not sensitive enough, try BLAST instead.
     # sendsketch.sh in=${best_assembly} persequence minhits=1 records=4 >> ./02_Assembly/taxonomy/${project}.log 2>&1
     echo Starting anvi\'o on ${project}
 
     conda activate anvio-7.1
-
+    # anvi'o hates dashes.
     prefix=$(echo $project | sed 's/-/_/g')
-    echo running anvio on ${project}
+    echo running anvi\'o on ${project}
     mkdir -p ./03_Anvio/${project}/COG
     mkdir -p ./03_Anvio/${project}/KOfam
     mkdir -p ./03_Anvio/${project}/Pfam
     mkdir -p ./03_Anvio/${project}/prodigal
-    mkdir -p ./03_Anvio/${project}/bowtie2
     mkdir -p ./03_Anvio/logs
     #Simplify headers as to not cause future anger; make a key so that contigs can be matched up later if needed; length cut off of 500bp; the prefix argument doesn't take hyphens
     echo Reformating ${project} fasta file and removing contigs \< 1000bp
@@ -969,7 +956,7 @@ if [[ "${coassemble}" == yes ]]; then
     cut -f4 ./03_Anvio/${project}/COG/${project}_COG20FunctionEvalue_filtered.txt | sort | uniq -c >> ./03_Anvio/${project}/COG/${project}_COG20Function.txt
     cut -f4 ./03_Anvio/${project}/COG/${project}_COG20CategoryEvalue_filtered.txt | sort | uniq -c >> ./03_Anvio/${project}/COG/${project}_COG20Category.txt
 
-    read -r -p "Run :  sqlite3 ./03_Anvio/${project}/${project}.db 'select count(*) from contigs_basic_info where length > ####;   and enter the length cutoff that results in <20,000 splits. Numbers only:  " len_cutoff || exit 100
+    read -r -p "Run :  sqlite3 ${project_dir}/03_Anvio/${project}/${project}.db 'select count(*) from contigs_basic_info where length > ####;   and enter the length cutoff that results in <20,000 splits. Numbers only:  " len_cutoff || exit 100
 
     for sample in `cat samples.txt`; do
       echo creating bam file for ${sample} HQ reads against the ${project} best assembly.
@@ -995,49 +982,53 @@ if [[ "${coassemble}" == yes ]]; then
 
     conda deactivate
   elif [[ "${anvio}" == no ]]; then :
-
   fi
+  ######################
+  ### BGC Annotation ###
+  ######################
+  if test -f "./04_Annotations/antismash/${project}_c${min_BGC}/${project}_renamed_c1k/index.html"; then :
+  else
+    read -r -p "What minimum contig length do you want to analyze for biosynthetic gene clusters?    " min_BGC || exit 100
 
-  read -r -p "What minimum contig length do you want to analyze for biosynthetic gene clusters?    " min_BGC || exit 100
+    mkdir -p ./04_Annotations/antismash/${project}_c${min_BGC}
+    echo Running antismash to annotate ${project} secondary metabolites
 
-  mkdir -p ./04_Annotations/antismash/${project}_c${min_BGC}
-  echo Running antismash to annotate ${project} secondary metabolites
+    ~/bin/run_antismash \
+    ./03_Anvio/${project}/${project}_renamed_c1k.fa \
+    ./04_Annotations/antismash/${project}_c${min_BGC} \
+    --hmmdetection-strictness relaxed \
+    --cb-general \
+    --cb-knownclusters \
+    --cb-subclusters \
+    --asf --rre --pfam2go --smcog-trees \
+    --genefinding-tool prodigal-m \
+    --cc-mibig \
+    --minlength ${min_BGC} \
+    -c ${CPU} >> ./${project}.log 2>&1
 
-  ~/bin/run_antismash \
-  ./03_Anvio/${project}/${project}_renamed_c1k.fa \
-  ./04_Annotations/antismash/${project}_c${min_BGC} \
-  --hmmdetection-strictness relaxed \
-  --cb-general \
-  --cb-knownclusters \
-  --cb-subclusters \
-  --asf --rre --pfam2go --smcog-trees \
-  --genefinding-tool prodigal-m \
-  --cc-mibig \
-  --minlength ${min_BGC} \
-  -c ${CPU} >> ./04_Annotations/antismash/${project}.log 2>&1
+    mkdir -p ./04_Annotations/bigscape/${project}_c${min_BGC}
 
-  mkdir -p ./04_Annotations/bigscape/${project}_c${min_BGC}
+    cd ./04_Annotations/antismash/${project}_c${min_BGC}/${project}_renamed_c1k
 
-  cd ./04_Annotations/antismash/${project}_c${min_BGC}/${project}_renamed_c1k
+    echo Running bigscape on ${project} antismash genbank files
 
-  echo Running bigscape on ${project} antismash genbank files
+    if test -f "c*.gbk"; then
+      for genbank_file in $(ls c*.gbk); do
+        cluster=$(echo ${genbank_file} | cut -f1 -d '_')
+        echo copying and renaming ${genbank_file} to cluster_${cluster}_${project}.gbk
+        cp ${genbank_file} ${project_dir}/04_Annotations/bigscape/${project}_c${min_BGC}/cluster_${cluster}_${project}.gbk
+      done
+    else echo No BGC found in ${project}
+    fi
 
-  if test -f "c*.gbk"; then
-    for genbank_file in $(ls c*.gbk); do
-      cluster=$(echo ${genbank_file} | cut -f1 -d '_')
-      echo copying and renaming ${genbank_file} to cluster_${cluster}_${project}.gbk
-      cp ${genbank_file} ${project_dir}/04_Annotations/bigscape/${project}_c${min_BGC}/cluster_${cluster}_${project}.gbk
-    done
-  else echo No BGC found in ${project}
+
+    cd ${project_dir}/04_Annotations/bigscape
+
+    ~/bin/run_bigscape.py ${project}_c${min_BGC} ${project}_c${min_BGC}_results --mix --mibig -c ${CPU} >> ./${project}.log 2&>1
+
+    cd ${project_dir}
   fi
-
-
-  cd ${project_dir}/04_Annotations/bigscape
-
-  ~/bin/run_bigscape.py ${project}_c${min_BGC} ${project}_c${min_BGC}_results --mix --mibig -c ${CPU} >> ./${project}.log 2&>1
-
-  cd ${project_dir}
-
+# Or else exit
 elif [[ "${coassemble}" == no ]]; then
   echo Co-Assemblies have not been generated nor analyzed for ${project}
 fi
